@@ -3,8 +3,14 @@
    Advanced animations, Three.js integration, and interactivity
    ============================================================ */
 
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
 // ==================== THREE.JS SCENE SETUP ====================
-let scene, camera, renderer, particles;
+let scene, camera, renderer, particles, controls;
+const clock = new THREE.Clock();
+const heroModels = [];
 
 function initThreeJS() {
     const container = document.getElementById('three-container');
@@ -13,13 +19,13 @@ function initThreeJS() {
     // Scene setup
     scene = new THREE.Scene();
     scene.background = null;
-    scene.fog = new THREE.Fog(0xffffff, 100, 1000);
+    scene.fog = new THREE.Fog(0xffffff, 22, 60);
 
     // Camera setup
     const width = container.clientWidth;
     const height = container.clientHeight;
-    camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    camera.position.z = 30;
+    camera = new THREE.PerspectiveCamera(65, width / height, 0.1, 1000);
+    camera.position.set(0, 0.25, 8);
 
     // Renderer setup with performance optimization
     renderer = new THREE.WebGLRenderer({ 
@@ -33,14 +39,107 @@ function initThreeJS() {
     renderer.shadowMap.enabled = false;
     container.appendChild(renderer.domElement);
 
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    controls.enableRotate = false;
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0);
+
+    addHeroLights();
+
     // Create animated particle background
     createParticleBackground();
+    loadGraduationModels();
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize);
 
     // Start animation loop
     animate();
+}
+
+function addHeroLights() {
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+    keyLight.position.set(4, 6, 8);
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x93c5fd, 1.2);
+    fillLight.position.set(-6, 3, 4);
+    scene.add(fillLight);
+}
+
+function loadGraduationModels() {
+    const loader = new GLTFLoader();
+    const modelPlacements = getHeroModelPlacements();
+
+    loader.load(
+        'models/scene.gltf',
+        (gltf) => {
+            const centeredModel = centerModel(gltf.scene);
+
+            modelPlacements.forEach((placement) => {
+                const model = centeredModel.clone(true);
+                const group = new THREE.Group();
+
+                group.add(model);
+                group.position.set(...placement.position);
+                group.scale.setScalar(placement.scale);
+                group.userData = {
+                    baseY: placement.position[1],
+                    phase: placement.phase,
+                    floatSpeed: placement.floatSpeed,
+                    rotateSpeed: placement.rotateSpeed
+                };
+
+                heroModels.push(group);
+                scene.add(group);
+            });
+        },
+        undefined,
+        (error) => {
+            console.error('Unable to load models/scene.gltf. Make sure models/scene.bin is also in the models folder.', error);
+        }
+    );
+}
+
+function getHeroModelPlacements() {
+    const modelElements = document.querySelectorAll('.hero .hero-model-instance');
+    const placements = Array.from(modelElements).map((element) => {
+        const position = (element.dataset.position || '0,0,0')
+            .split(',')
+            .map((value) => Number(value.trim()));
+
+        return {
+            position,
+            scale: Number(element.dataset.scale || 0.5),
+            phase: Number(element.dataset.phase || 0),
+            floatSpeed: Number(element.dataset.floatSpeed || 1),
+            rotateSpeed: Number(element.dataset.rotateSpeed || 0.5)
+        };
+    });
+
+    return placements.length ? placements : [
+        { position: [-4.8, 3, -1], scale: 0.5, phase: 0.2, floatSpeed: 1.1, rotateSpeed: 0.55 },
+        { position: [4.8, 3, -1], scale: 0.5, phase: 1.6, floatSpeed: 0.9, rotateSpeed: 0.45 },
+        { position: [-4.8, -2.7, -1], scale: 0.5, phase: 2.9, floatSpeed: 1.25, rotateSpeed: 0.65 },
+        { position: [4.8, -2.7, -1], scale: 0.5, phase: 4.1, floatSpeed: 1, rotateSpeed: 0.5 }
+    ];
+}
+
+function centerModel(model) {
+    const wrapper = new THREE.Group();
+    const source = model.clone(true);
+    const box = new THREE.Box3().setFromObject(source);
+    const center = box.getCenter(new THREE.Vector3());
+
+    source.position.sub(center);
+    wrapper.add(source);
+
+    return wrapper;
 }
 
 function createParticleBackground() {
@@ -81,6 +180,7 @@ function createParticleBackground() {
 
 function animate() {
     requestAnimationFrame(animate);
+    const elapsed = clock.getElapsedTime();
 
     // Animate particles
     if (particles) {
@@ -88,9 +188,22 @@ function animate() {
         particles.rotation.y += 0.00005;
     }
 
+    heroModels.forEach((model, index) => {
+        const phaseTime = elapsed * model.userData.floatSpeed + model.userData.phase;
+        const jump = Math.max(0, Math.sin(phaseTime * 2.6)) * 0.25;
+
+        model.position.y = model.userData.baseY + Math.sin(phaseTime) * 0.65 + jump;
+        model.position.x += Math.sin(phaseTime * 0.6) * 0.003;
+        model.rotation.y = Math.cos(phaseTime * 0.7) * 0.55 + elapsed * (model.userData.rotateSpeed + index * 0.05);
+    });
+
     // Add mouse interactivity on desktop
     if (window.innerWidth > 768) {
         updateMouseInteraction();
+    }
+
+    if (controls) {
+        controls.update();
     }
 
     renderer.render(scene, camera);
@@ -104,7 +217,7 @@ function updateMouseInteraction() {
         const rotationSpeed = 0.0001;
         camera.position.x += (mouseX - camera.position.x) * rotationSpeed;
         camera.position.y += (-mouseY - camera.position.y) * rotationSpeed;
-        camera.lookAt(scene.position);
+        camera.lookAt(controls ? controls.target : scene.position);
     }
 }
 
